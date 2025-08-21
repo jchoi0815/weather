@@ -1,0 +1,825 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>HKO — Warnings, Today & 3-Day Forecast</title>
+<meta name="color-scheme" content="light dark"/>
+<style>
+  :root{
+    --bg:#f0f2f5; --text:#111; --muted:#6e6e73; --border:rgba(0,0,0,.08);
+    --card-bg:rgba(255,255,255,.82); --shadow:0 14px 40px rgba(0,0,0,.10);
+    --warn-icon: 64px; --today-icon: 52px; --gap: 12px; --card-max: 560px;
+  }
+  @media(prefers-color-scheme:dark){
+    :root{ --bg:#0b0b0c; --text:#f5f5f7; --muted:#a1a1a6; --border:rgba(255,255,255,.14);
+           --card-bg:rgba(30,30,32,.8); --shadow:0 18px 50px rgba(0,0,0,.6); }
+  }
+  html,body{
+    margin:0;min-height:100vh;background:var(--bg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial;
+    color:var(--text);display:grid;place-items:center;
+  }
+  .card{
+    width:min(92vw,var(--card-max));border:1px solid var(--border);border-radius:28px;
+    background:var(--card-bg);backdrop-filter:saturate(180%) blur(22px);
+    -webkit-backdrop-filter:saturate(180%) blur(22px);box-shadow:var(--shadow);
+    padding:clamp(14px, 2.8vw, 22px);display:flex;flex-direction:column;gap:clamp(8px, 1.8vw, 14px);
+  }
+
+  .clock{ font-size: clamp(14px, 2.2vw, 18px); font-weight:600;text-align:center; }
+  .row-label{ font-size: clamp(11px, 1.8vw, 13px); color:var(--muted); margin:2px 4px 4px; }
+
+  /* Warning icons — single line */
+  .icons-row{
+    display:flex; align-items:center; gap:var(--gap);
+    flex-wrap:nowrap; overflow:hidden;
+  }
+.icons-row img {
+  width: var(--warn-icon);
+  height: var(--warn-icon);
+  object-fit: contain;
+  flex: 0 0 auto;
+
+}
+
+  /* Today line */
+  .today-line{
+    display:flex; align-items:center; gap:clamp(6px, 1.5vw, 10px);
+    font-size: clamp(13px, 2vw, 15px); font-weight:500;
+  }
+  .today-line img{ width:var(--today-icon); height:var(--today-icon); object-fit:contain; }
+
+  /* Forecast table */
+  .fnd-wrap{ margin-top: 2px; }
+  table.fnd{
+    width:100%; border-collapse:collapse; border-spacing:0;
+    font-size: clamp(12px, 1.9vw, 14px);
+  }
+  .fnd th, .fnd td{
+    padding: 8px 10px; border-top:1px solid var(--border); vertical-align:middle;
+  }
+  .fnd th{ text-align:left; color:var(--muted); font-weight:600; }
+  .fnd td.icon-cell{ width:56px; }
+  .fnd td.icon-cell img{ width:40px; height:40px; object-fit:contain; }
+  .fnd .temp{ white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .fnd .desc{ color:var(--muted); }
+
+  .footer{
+    display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;
+    gap:8px;color:var(--muted);font-size:clamp(11px, 1.8vw, 13px);margin-top:6px
+  }
+  .btn{
+    border:1px solid var(--border);background:transparent;color:inherit;
+    font-weight:600;border-radius:14px;padding:clamp(6px, 1.2vw, 8px) clamp(10px, 2vw, 12px);
+    cursor:pointer;font-size:clamp(12px, 1.9vw, 13px)
+  }
+
+
+</style>
+</head>
+<body>
+
+<div class="card" id="hko-card">
+  <!-- Live HK date + time -->
+  <div id="hkClock" class="clock">--</div>
+
+  <!-- Warning icons (single line, no names) -->
+  <div class="row-label">Active warnings</div>
+  <div class="icons-row" id="hko-icons"></div>
+
+  <!-- Today line (text + icon same line) -->
+  <div class="today-line">
+    <span>Today:</span>
+    <img id="weather-icon" alt="" src=""/>
+  </div>
+
+  <!-- 3-day forecast table -->
+  <div class="fnd-wrap">
+    <table class="fnd" id="fndTable" aria-label="3-day forecast">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Icon</th>
+          <th>Temp (°C)</th>
+          <th>Weather</th>
+        </tr>
+      </thead>
+      <tbody id="fndBody">
+        <!-- rows inserted here -->
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <button id="refreshBtn" class="btn" type="button">Refresh</button>
+    <span id="lastRefresh">Last checked: --</span>
+  </div>
+</div>
+
+<script>
+  // ---------------- Language (auto + manual switcher, no HTML/CSS changes) ----------------
+  const I18N = {
+    en: {
+      activeWarnings: 'Active warnings',
+      today: 'Today:',
+      lastChecked: 'Last checked: ',
+      noWarning: 'No warning is issued',
+      error: '⚠️ Error loading data',
+      location: 'Location:',
+      temp: 'Temp',
+      raining: 'Raining',
+      langEN: 'EN',
+      langTC: '中',
+      theme: 'Theme',
+      themeAuto: 'Auto',
+      themeLight: 'Light',
+      themeDark: 'Dark',
+      detailsMore: 'More details',
+      detailsLess: 'Less details'
+    },
+    tc: {
+      activeWarnings: '生效警告',
+      today: '今日：',
+      lastChecked: '上次更新：',
+      noWarning: '現時沒有警告',
+      error: '⚠️ 載入資料時出錯',
+      location: '地點：',
+      temp: '氣溫',
+      raining: '降雨機率',
+      langEN: 'EN',
+      langTC: '中',
+      theme: '主題',
+      themeAuto: '自動',
+      themeLight: '淺色',
+      themeDark: '深色',
+      detailsMore: '更多詳情',
+      detailsLess: '收起詳情'
+    }
+  };
+
+  function detectLang(){
+    const url = new URL(location.href);
+    const q = (url.searchParams.get('lang') || '').toLowerCase();
+    if (q === 'en' || q === 'tc') return q;
+    const saved = localStorage.getItem('hkoLang');
+    if (saved === 'en' || saved === 'tc') return saved;
+    const nav = (navigator.language || '').toLowerCase();
+    if (nav.startsWith('zh-hant') || nav === 'zh-hk' || nav === 'zh-tw') return 'tc';
+    return 'en';
+  }
+  let LANG = detectLang();
+  const t = (k) => (I18N[LANG] && I18N[LANG][k]) || I18N.en[k];
+
+  function setLang(lang){
+    if (lang !== 'en' && lang !== 'tc') return;
+    LANG = lang;
+    localStorage.setItem('hkoLang', lang);
+    applyStaticLabels();
+    fetchAll(); // re-fetch in chosen language
+    highlightLangButton();
+    updateThemeToggleIcon(); // keep tooltip localized
+    updateDetailsButtonLabel();
+  }
+  window.setLang = setLang;
+
+  // ---------------- Theme (Auto / Light / Dark) — single icon button ----------------
+  const THEME_LIGHT_VARS = {
+    '--bg':'#f0f2f5','--text':'#111','--muted':'#6e6e73','--border':'rgba(0,0,0,.08)',
+    '--card-bg':'rgba(255,255,255,.82)','--shadow':'0 14px 40px rgba(0,0,0,.10)'
+  };
+  const THEME_DARK_VARS = {
+    '--bg':'#0b0b0c','--text':'#f5f5f7','--muted':'#a1a1a6','--border':'rgba(255,255,255,.14)',
+    '--card-bg':'rgba(30,30,32,.8)','--shadow':'0 18px 50px rgba(0,0,0,.6)'
+  };
+
+  let themeChoice = localStorage.getItem('hkoTheme') || 'auto';
+  const mqlDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
+
+  function applyTheme(choice = themeChoice){
+    themeChoice = choice;
+    localStorage.setItem('hkoTheme', themeChoice);
+
+    const old = document.getElementById('themeOverride');
+    if (old) old.remove();
+
+    if (themeChoice === 'auto'){
+      if (mqlDark && !mqlDark._bound){
+        mqlDark.addEventListener('change', ()=> applyTheme('auto'));
+        mqlDark._bound = true;
+      }
+    } else {
+      const vars = themeChoice === 'dark' ? THEME_DARK_VARS : THEME_LIGHT_VARS;
+      const css = `:root{${Object.entries(vars).map(([k,v])=>`${k}:${v}`).join(';')}}`;
+      const tag = document.createElement('style');
+      tag.id = 'themeOverride';
+      tag.textContent = css;
+      document.head.appendChild(tag);
+    }
+    updateThemeToggleIcon();
+  }
+
+  function buildThemeToggle(){
+    const footer = document.querySelector('.footer');
+    if (!footer) return;
+
+    let wrap = document.getElementById('themeWrap');
+    if (!wrap){
+      wrap = document.createElement('span');
+      wrap.id = 'themeWrap';
+      wrap.style.display = 'flex';
+      wrap.style.alignItems = 'center';
+      wrap.style.gap = '6px';
+      wrap.style.marginLeft = '6px';
+      const refreshBtn = document.getElementById('refreshBtn');
+      footer.insertBefore(wrap, refreshBtn);
+    }else{
+      wrap.innerHTML = '';
+    }
+
+    const btn = document.createElement('button');
+    btn.id = 'btnThemeCycle';
+    btn.type = 'button';
+    btn.style.border = '1px solid var(--border)';
+    btn.style.background = 'transparent';
+    btn.style.borderRadius = '10px';
+    btn.style.padding = '6px 10px';
+    btn.style.cursor = 'pointer';
+    btn.style.font = 'inherit';
+    btn.addEventListener('click', ()=>{
+      const order = ['auto','light','dark'];
+      const idx = order.indexOf(themeChoice);
+      const next = order[(idx+1)%order.length];
+      applyTheme(next);
+    });
+    wrap.appendChild(btn);
+
+    updateThemeToggleIcon();
+  }
+
+  function updateThemeToggleIcon(){
+    const btn = document.getElementById('btnThemeCycle');
+    if (!btn) return;
+    const icon = themeChoice==='dark' ? '🌙' : (themeChoice==='light' ? '☀️' : '🖥️');
+    btn.textContent = icon;
+    const labelMap = {
+      auto: t('theme') + ': ' + t('themeAuto'),
+      light: t('theme') + ': ' + t('themeLight'),
+      dark: t('theme') + ': ' + t('themeDark')
+    };
+    btn.title = labelMap[themeChoice];
+    btn.setAttribute('aria-label', labelMap[themeChoice]);
+  }
+
+  // Build API endpoint with language
+  const API = 'https://data.weather.gov.hk/weatherAPI/opendata/weather.php';
+  const urlOf = (dataType) => `${API}?dataType=${dataType}&lang=${LANG}`;
+
+  // ---------- Live Hong Kong clock ----------
+  function updateClock(){
+    const now=new Date();
+    const fmt={weekday:'short',year:'numeric',month:'short',day:'numeric',
+               hour:'2-digit',minute:'2-digit',second:'2-digit',
+               hour12:false,timeZone:'Asia/Hong_Kong'};
+    document.getElementById('hkClock').textContent=new Intl.DateTimeFormat('en-GB',fmt).format(now);
+  }
+  updateClock(); setInterval(updateClock,1000);
+
+  // ---------- Language-aware HKO endpoints ----------
+  const WARN_URL = () => urlOf('warnsum');
+  //const WARN_URL = '.\\warnsum.json';
+  const RHR_URL  = () => urlOf('rhrread');
+  const FND_URL  = () => urlOf('fnd');
+
+  // Icon helpers
+  const hkoIconUrl = (n) => `https://www.weather.gov.hk/images/HKOWxIconOutline/pic${n}.png`;
+  const owmIconUrl = (code) => `https://openweathermap.org/img/wn/${code}@2x.png`;
+
+  // Map warning code -> generic HKO icon number (fallback only)
+  function warningToIconNo(code, subtype){
+    code=(code||'').toUpperCase(); subtype=(subtype||'').toUpperCase();
+    if(code==='WTCSGNL'||code==='WTCPRE8'||code==='WMSGNL')return 80; // Typhoon/Pre-8/Monsoon
+    if(code==='WRAIN'){ if(subtype==='WRAINB')return 64; if(subtype==='WRAINR')return 63; return 62; }
+    if(code==='WTS')return 65;
+    if(code==='WFNTSA')return 63;
+    if(['WFIRE','WFIRER','WFIREY'].includes(code))return 81;
+    if(code==='WHOT')return 90;
+    if(['WCOLD','WFROST'].includes(code))return 93;
+    if(code==='WL')return 63;
+    if(code==='WTSUI')return 80;
+    return 60;
+  }
+
+  // ----- Helpers for fnd/rhr parsing -----
+  function num(v){ const n = typeof v==='object' && v?.value!=null ? v.value : v; const x = Number(n); return isFinite(x) ? x : null; }
+  function fmtDate(yyyymmdd){
+    if(!yyyymmdd) return '';
+    const s=String(yyyymmdd); const y=s.slice(0,4), m=s.slice(4,6), d=s.slice(6,8);
+    const dt=new Date(`${y}-${m}-${d}T00:00:00+08:00`);
+    return new Intl.DateTimeFormat('en-GB',{weekday:'short', day:'2-digit', month:'short'}).format(dt);
+  }
+  // Day-diff (Hong Kong time)
+  function diffDaysHK(yyyymmdd){
+    if(!yyyymmdd) return null;
+    const s=String(yyyymmdd);
+    const y=s.slice(0,4), m=s.slice(4,6), d=s.slice(6,8);
+    const target = new Date(`${y}-${m}-${d}T00:00:00+08:00`);
+    const now = new Date();
+    const todayHK = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Hong_Kong' }));
+    todayHK.setHours(0,0,0,0);
+    const diff = (target - todayHK)/(1000*60*60*24);
+    return Math.round(diff);
+  }
+  // Day/night
+  function isDayHK(date){
+    const hk = new Date(date.toLocaleString('en-US',{timeZone:'Asia/Hong_Kong'}));
+    const h = hk.getHours();
+    return h >= 6 && h < 18;
+  }
+
+  // HKO -> icon URL (OWM preferred; HKO fallback 70–93)
+  function iconSrcFromHko(hkoIconNo, dateForDayNight, forceDay=false){
+    const n = Number(hkoIconNo);
+    if (!Number.isFinite(n)) return hkoIconUrl(60);
+    if (n >= 70 && n <= 93) return hkoIconUrl(n);
+    const d = (forceDay || isDayHK(dateForDayNight ?? new Date())) ? 'd' : 'n';
+    if (n === 50) return owmIconUrl(`01${d}`);
+    if (n === 51 || n === 52) return owmIconUrl(`02${d}`);
+    if (n === 53 || n === 54) return owmIconUrl(`10${d}`);
+    if (n === 60 || n === 61) return owmIconUrl(`04${d}`);
+    if (n === 62 || n === 63 || n === 64) return owmIconUrl(`09${d}`);
+    if (n === 65) return owmIconUrl(`11${d}`);
+    return owmIconUrl(`03${d}`);
+  }
+
+  // -------- Custom warning icons from HKO legend --------
+  function warnIconCustomSrc(code, subtype){
+    const c  = (code||'').toUpperCase();
+    const st = (subtype||'').toUpperCase();
+    const IMG = 'https://www.hko.gov.hk/en/wxinfo/dailywx/images/';
+    if (c === 'WTCSGNL'){
+      if (st === 'TC1')  return IMG + 'tc1.gif';
+      if (st === 'TC3')  return IMG + 'tc3.gif';
+      if (st === 'TC8NE') return IMG + 'tc8a.gif';
+      if (st === 'TC8SE') return IMG + 'tc8b.gif';
+      if (st === 'TC8SW') return IMG + 'tc8c.gif';
+      if (st === 'TC8NW') return IMG + 'tc8d.gif';
+      if (st === 'TC9')  return IMG + 'tc9.gif';
+      if (st === 'TC10') return IMG + 'tc10.gif';
+    }
+    if (c === 'WRAIN'){
+      if (st === 'WRAINY') return IMG + 'raina.gif';
+      if (st === 'WRAINR') return IMG + 'rainr.gif';
+      if (st === 'WRAINB') return IMG + 'rainb.gif';
+    }
+    if (c === 'WTS') return IMG + 'ts.gif';
+    if (c === 'WFNTSA') return IMG + 'ntfl.gif';
+    if (c === 'WL') return IMG + 'landslip.gif';
+    if (c === 'WCOLD') return IMG + 'cold.gif';
+    if (c === 'WMSGNL') return IMG + 'sms.gif';
+    if (c === 'WFROST') return IMG + 'frost.gif';
+    if (c === 'WHOT') return IMG + 'vhot.gif';
+    if (c === 'WFIRER') return IMG + 'firer.gif';
+    if (c === 'WFIREY') return IMG + 'firey.gif';
+    if (c === 'WTSUI') return IMG + 'tsunami-warn.gif';
+    return null;
+  }
+
+  // -------- Location selection (no HTML/CSS change) --------
+  let selectedPlace = localStorage.getItem('hkoPlace') || '';
+  let lastRhr = null; // cache
+  let lastFnd = null; // cache 9-day for expanding
+
+  function buildLocationSelector(rhr){
+    lastRhr = rhr;
+    const stations = Array.isArray(rhr?.temperature?.data) ? rhr.temperature.data.slice() : [];
+    if (!stations.length) return;
+
+    const footer = document.querySelector('.footer');
+    if (!footer) return;
+
+    let wrapper = document.getElementById('locWrap');
+    if (!wrapper){
+      wrapper = document.createElement('span');
+      wrapper.id = 'locWrap';
+      wrapper.style.display = 'flex';
+      wrapper.style.alignItems = 'center';
+      wrapper.style.gap = '6px';
+      wrapper.style.flexWrap = 'wrap';
+      wrapper.style.fontSize = '13px';
+      const refreshBtn = document.getElementById('refreshBtn');
+      footer.insertBefore(wrapper, refreshBtn);
+    }else{
+      wrapper.innerHTML = '';
+    }
+
+    const label = document.createElement('span');
+    label.id = 'locLabel';
+    label.textContent = t('location');
+    wrapper.appendChild(label);
+
+    const sel = document.createElement('select');
+    sel.id = 'locSelect';
+    sel.style.padding = '6px 8px';
+    sel.style.border = '1px solid var(--border)';
+    sel.style.borderRadius = '10px';
+    sel.style.background = 'transparent';
+    sel.style.color = 'inherit';
+    sel.style.font = 'inherit';
+
+    stations.sort((a,b)=>{
+      const ahko = /hong\s*kong\s*observatory/i.test(a.place||'');
+      const bhko = /hong\s*kong\s*observatory/i.test(b.place||'');
+      if (ahko && !bhko) return -1;
+      if (!ahko && bhko) return 1;
+      return String(a.place||'').localeCompare(String(b.place||''),'en');
+    });
+
+    stations.forEach(st=>{
+      const opt = document.createElement('option');
+      opt.value = st.place;
+      opt.textContent = st.place;
+      sel.appendChild(opt);
+    });
+
+    if (selectedPlace && stations.some(s=>s.place===selectedPlace)){
+      sel.value = selectedPlace;
+    }else{
+      const hkoStation = stations.find(s=>/hong\s*kong\s*observatory/i.test(s.place||''));
+      sel.value = hkoStation ? hkoStation.place : stations[0].place;
+      selectedPlace = sel.value;
+      localStorage.setItem('hkoPlace', selectedPlace);
+    }
+
+    sel.addEventListener('change', ()=>{
+      selectedPlace = sel.value;
+      localStorage.setItem('hkoPlace', selectedPlace);
+      renderTodayMetaWithLastData();
+    });
+
+    wrapper.appendChild(sel);
+  }
+
+  // ----- Manual language switcher (injected; no HTML/CSS edits) -----
+  function buildLangSwitcher(){
+    const footer = document.querySelector('.footer');
+    if (!footer) return;
+
+    let wrap = document.getElementById('langWrap');
+    if (!wrap){
+      wrap = document.createElement('span');
+      wrap.id = 'langWrap';
+      wrap.style.display = 'flex';
+      wrap.style.alignItems = 'center';
+      wrap.style.gap = '6px';
+      wrap.style.marginLeft = '6px';
+      const refreshBtn = document.getElementById('refreshBtn');
+      footer.insertBefore(wrap, refreshBtn);
+    }else{
+      wrap.innerHTML = '';
+    }
+
+    const mkBtn = (id, label, active) => {
+      const b = document.createElement('button');
+      b.id = id;
+      b.type = 'button';
+      b.textContent = label;
+      b.style.border = '1px solid var(--border)';
+      b.style.background = 'transparent';
+      b.style.borderRadius = '10px';
+      b.style.padding = '6px 10px';
+      b.style.cursor = 'pointer';
+      b.style.font = 'inherit';
+      b.style.opacity = active ? '1' : '0.6';
+      b.addEventListener('click', ()=> setLang(id === 'btnEN' ? 'en' : 'tc'));
+      return b;
+    };
+
+    wrap.appendChild(mkBtn('btnEN', t('langEN'), LANG==='en'));
+    wrap.appendChild(mkBtn('btnTC', t('langTC'), LANG==='tc'));
+  }
+
+  function highlightLangButton(){
+    const btnEN = document.getElementById('btnEN');
+    const btnTC = document.getElementById('btnTC');
+    if (btnEN) btnEN.style.opacity = (LANG==='en' ? '1' : '0.6');
+    if (btnTC) btnTC.style.opacity = (LANG==='tc' ? '1' : '0.6');
+    if (btnEN) btnEN.textContent = t('langEN');
+    if (btnTC) btnTC.textContent = t('langTC');
+  }
+
+  // ----- Details (expand/collapse to 6-day) -----
+  let detailsExpanded = (localStorage.getItem('hkoDetailsExpanded') || '0') === '1';
+
+  function buildDetailsToggle(){
+    const footer = document.querySelector('.footer');
+    if (!footer) return;
+
+    let wrap = document.getElementById('detailsWrap');
+    if (!wrap){
+      wrap = document.createElement('span');
+      wrap.id = 'detailsWrap';
+      wrap.style.display = 'flex';
+      wrap.style.alignItems = 'center';
+      wrap.style.gap = '6px';
+      wrap.style.marginLeft = '6px';
+      const refreshBtn = document.getElementById('refreshBtn');
+      footer.insertBefore(wrap, refreshBtn);
+    }else{
+      wrap.innerHTML = '';
+    }
+
+    const btn = document.createElement('button');
+    btn.id = 'btnDetails';
+    btn.type = 'button';
+    btn.style.border = '1px solid var(--border)';
+    btn.style.background = 'transparent';
+    btn.style.borderRadius = '10px';
+    btn.style.padding = '6px 10px';
+    btn.style.cursor = 'pointer';
+    btn.style.font = 'inherit';
+    btn.addEventListener('click', ()=>{
+      detailsExpanded = !detailsExpanded;
+      localStorage.setItem('hkoDetailsExpanded', detailsExpanded ? '1' : '0');
+      updateDetailsButtonLabel();
+      renderForecastRows(); // re-render rows according to state
+    });
+    wrap.appendChild(btn);
+
+    updateDetailsButtonLabel();
+  }
+  function updateDetailsButtonLabel(){
+    const btn = document.getElementById('btnDetails');
+    if (!btn) return;
+    btn.textContent = detailsExpanded ? t('detailsLess') : t('detailsMore');
+  }
+
+  // ----- Temperature / rain helpers -----
+  function extractTempForPlace(rhr, placeName){
+    const list = rhr?.temperature?.data;
+    if (!Array.isArray(list) || !list.length) return null;
+    const picked = list.find(it => (it.place||'') === placeName);
+    if (picked) return num(picked?.value ?? picked?.temp ?? picked?.reading);
+    return null;
+  }
+
+  function extractCurrentTempC(rhr){
+    if (selectedPlace){
+      const v = extractTempForPlace(rhr, selectedPlace);
+      if (v != null) return v;
+    }
+    const list = rhr?.temperature?.data;
+    if (!Array.isArray(list) || !list.length) return null;
+    const hko = list.find(it => typeof it?.place === 'string' && /hong\s*kong\s*observatory/i.test(it.place));
+    const cand = hko || list[0];
+    return num(cand?.value ?? cand?.temp ?? cand?.reading);
+  }
+
+  function extractTodayRainChance(fnd){
+    const today = Array.isArray(fnd?.weatherForecast) ? fnd.weatherForecast[0] : null;
+    if (!today) return null;
+    const pctNum = num(today?.ForecastChanceOfRain ?? today?.forecastChanceOfRain ?? today?.PSR?.value);
+    if (pctNum != null) return `${pctNum}%`;
+    const psrTxt = today?.PSR ?? today?.forecastPSR ?? today?.forecastPsr;
+    return psrTxt ? String(psrTxt) : null;
+  }
+
+  // Localize static labels already in the DOM
+  function applyStaticLabels(){
+    const labels = document.querySelectorAll('.row-label');
+    if (labels[0]) labels[0].textContent = t('activeWarnings');
+    const todaySpan = document.querySelector('.today-line span');
+    if (todaySpan) todaySpan.textContent = t('today');
+    const lr = document.getElementById('lastRefresh');
+    if (lr && lr.textContent){
+      const ts = lr.textContent.replace(/^[^:]+:\s*/, '');
+      lr.textContent = t('lastChecked') + ts;
+    }
+    const locLabel = document.getElementById('locLabel');
+    if (locLabel) locLabel.textContent = t('location');
+
+    buildLangSwitcher();
+    highlightLangButton();
+    buildThemeToggle();
+    updateThemeToggleIcon();
+    buildDetailsToggle();
+  }
+
+  // Render "Today: [icon] Temp (Place): xx°C · Raining: yy%"
+  function renderTodayMeta(tempC, rainChance){
+    const todayLine = document.querySelector('.today-line');
+    if (!todayLine) return;
+    let meta = document.getElementById('todayMeta');
+    if (!meta){
+      meta = document.createElement('span');
+      meta.id = 'todayMeta';
+      meta.style.marginLeft = '6px';
+      meta.style.fontSize = '0.95em';
+      meta.style.color = 'inherit';
+      todayLine.appendChild(meta);
+    }
+    const parts = [];
+    if (tempC != null){
+      const place = selectedPlace ? ` (${selectedPlace})` : '';
+      const val = Math.round(Number(tempC));
+      parts.push(`${t('temp')}${place}: ${val}°C`);
+    }
+    if (rainChance) parts.push(`${t('raining')}: ${rainChance}`);
+    meta.textContent = parts.join(' · ');
+  }
+  function renderTodayMetaWithLastData(){
+    if (!lastRhr) return;
+    const tempC = extractCurrentTempC(lastRhr);
+    const meta = document.getElementById('todayMeta');
+    let rainTxt = '';
+    if (meta && meta.textContent){
+      const m = meta.textContent.match(/(?:Raining|降雨機率):\s*[^·]+/);
+      rainTxt = m ? m[0].split(':')[1].trim() : '';
+    }
+    renderTodayMeta(tempC, rainTxt || null);
+  }
+
+  const dom={
+    icons:document.getElementById('hko-icons'),
+    weatherIcon:document.getElementById('weather-icon'),
+    fndBody:document.getElementById('fndBody'),
+    last:document.getElementById('lastRefresh'),
+    refresh:document.getElementById('refreshBtn')
+  };
+
+  function humanFull(d){
+    return new Intl.DateTimeFormat(undefined,{dateStyle:'short',timeStyle:'medium'}).format(d);
+  }
+
+  function fitWarningIcons(){
+    const row = dom.icons;
+    const count = row.querySelectorAll('img').length || 1;
+    const w = row.clientWidth;
+    const gap = 12;
+    let size = Math.max(40, Math.min(72, Math.floor(w / Math.max(3, count))));
+    while (size > 28 && (count*size + (count-1)*gap) > w) size -= 2;
+    document.documentElement.style.setProperty('--warn-icon', size + 'px');
+    document.documentElement.style.setProperty('--today-icon', Math.min(size+4, 64) + 'px');
+  }
+
+  // -------- Forecast rendering (3-day base + optional extra 3) --------
+  function fmtRow(it){
+    const iconNo = Number(it?.ForecastIcon ?? it?.forecastIcon);
+    const dateStr = String(it?.forecastDate ?? it?.ForecastDate);
+    const y=dateStr.slice(0,4), m=dateStr.slice(4,6), d=dateStr.slice(6,8);
+    const hkNoon = new Date(`${y}-${m}-${d}T12:00:00+08:00`);
+    const iconSrc = iconSrcFromHko(iconNo || 60, hkNoon, true);
+    const minT   = num(it?.ForecastMinTemp ?? it?.forecastMintemp ?? it?.forecastMintemp?.value);
+    const maxT   = num(it?.ForecastMaxTemp ?? it?.forecastMaxtemp ?? it?.forecastMaxtemp?.value);
+    const date   = it?.forecastDate ?? it?.ForecastDate;
+    const desc   = it?.forecastWeather ?? it?.ForecastWeather ?? '';
+
+    const tr = document.createElement('tr');
+    const tdDate = document.createElement('td');
+    tdDate.textContent = fmtDate(date);
+    tr.appendChild(tdDate);
+
+    const tdIcon = document.createElement('td');
+    tdIcon.className = 'icon-cell';
+    const img = document.createElement('img');
+    img.src = iconSrc;
+    img.alt = '';
+    tdIcon.appendChild(img);
+    tr.appendChild(tdIcon);
+
+    const tdTemp = document.createElement('td');
+    tdTemp.className = 'temp';
+    tdTemp.textContent =
+      (Number.isFinite(minT) && Number.isFinite(maxT)) ? `${minT} – ${maxT}` :
+      (Number.isFinite(maxT) ? `${maxT}` : '');
+    tr.appendChild(tdTemp);
+
+    const tdDesc = document.createElement('td');
+    tdDesc.className = 'desc';
+    tdDesc.textContent = desc;
+    tr.appendChild(tdDesc);
+
+    return tr;
+  }
+
+  function renderForecastRows(){
+    // Clear all rows first
+    dom.fndBody.innerHTML = '';
+
+    const arr = Array.isArray(lastFnd?.weatherForecast) ? lastFnd.weatherForecast : [];
+    if (!arr.length) return;
+
+    // Always show exactly +1, +2, +3
+    const baseDays = [1,2,3];
+    const base = arr
+      .map(it => ({ it, d: diffDaysHK(it?.forecastDate ?? it?.ForecastDate) }))
+      .filter(x => baseDays.includes(x.d))
+      .sort((a,b)=>a.d-b.d)
+      .map(x => x.it);
+
+    base.forEach(it => dom.fndBody.appendChild(fmtRow(it)));
+
+    // If expanded, also add +4, +5, +6
+    if (detailsExpanded){
+      const extraDays = [4,5,6];
+      const extra = arr
+        .map(it => ({ it, d: diffDaysHK(it?.forecastDate ?? it?.ForecastDate) }))
+        .filter(x => extraDays.includes(x.d))
+        .sort((a,b)=>a.d-b.d)
+        .map(x => x.it);
+
+      extra.forEach(it => {
+        const tr = fmtRow(it);
+        tr.setAttribute('data-extra','1');
+        dom.fndBody.appendChild(tr);
+      });
+    }
+  }
+
+  async function fetchAll(){
+    applyStaticLabels(); // reflect current language/theme/buttons
+
+    // reset UI sections that always re-render
+    dom.icons.innerHTML='';
+    dom.weatherIcon.src=''; dom.weatherIcon.alt='';
+    dom.fndBody.innerHTML='';
+
+    try{
+      const [warnRes, rhrRes, fndRes] = await Promise.all([
+        fetch(WARN_URL(),{cache:'no-store'}),
+        fetch(RHR_URL(),{cache:'no-store'}),
+        fetch(FND_URL(),{cache:'no-store'})
+      ]);
+
+      // ---- warnings ----
+      const warnData = await warnRes.json();
+      const entries = Object.entries(warnData).filter(([_,v])=>v && typeof v==='object' && v.code);
+      if(entries.length===0){
+        dom.icons.textContent = t('noWarning');
+      }else{
+        for(const [,w] of entries){
+          const img=document.createElement('img');
+          const custom = warnIconCustomSrc(w.code, w.type || w.subtype);
+          img.src = custom || hkoIconUrl(warningToIconNo(w.code, w.type || w.subtype));
+          img.alt = '';
+          dom.icons.appendChild(img);
+        }
+      }
+
+      // ---- parse rhr + fnd ----
+      let rhr=null, fnd=null;
+      try { rhr = await rhrRes.json(); } catch {}
+      try { fnd = await fndRes.json(); } catch {}
+      lastFnd = fnd;
+
+      // Location / Lang / Theme controls
+      if (rhr) buildLocationSelector(rhr);
+      buildLangSwitcher();
+      buildThemeToggle();
+      buildDetailsToggle();
+
+      // TODAY icon
+      let todayHkoIconNo = null;
+      if (rhr && Array.isArray(rhr.icon) && rhr.icon.length>0){
+        const first = rhr.icon[0];
+        todayHkoIconNo = typeof first==='number' ? first :
+                         (typeof first==='string' ? parseInt(first,10) : null);
+      }
+      if (todayHkoIconNo==null && fnd && Array.isArray(fnd.weatherForecast) && fnd.weatherForecast.length>0){
+        const ic = fnd.weatherForecast[0].ForecastIcon ?? fnd.weatherForecast[0].forecastIcon;
+        if (typeof ic==='number') todayHkoIconNo = ic;
+        else if (typeof ic==='string') todayHkoIconNo = parseInt(ic,10) || null;
+      }
+      dom.weatherIcon.src = iconSrcFromHko(todayHkoIconNo ?? 60, new Date(), false);
+
+      // Today meta
+      if (rhr) lastRhr = rhr;
+      const tempC = rhr ? extractCurrentTempC(rhr) : null;
+      const rainChance = (fnd ? extractTodayRainChance(fnd) : null);
+      renderTodayMeta(tempC, rainChance);
+
+      // Forecast rows (3-day or 6-day depending on toggle)
+      renderForecastRows();
+
+      // Last checked
+      dom.last.textContent = t('lastChecked') + humanFull(new Date());
+
+      requestAnimationFrame(fitWarningIcons);
+
+    }catch(e){
+      dom.icons.textContent = t('error');
+      requestAnimationFrame(fitWarningIcons);
+    }
+  }
+
+  // ---- INIT ----
+  applyTheme(themeChoice);          // apply saved theme immediately
+  applyStaticLabels();              // build language, theme, and details UI
+  fetchAll();
+  document.getElementById('refreshBtn').addEventListener('click', fetchAll);
+  setInterval(fetchAll, 5*60*1000);
+  window.addEventListener('resize', fitWarningIcons);
+</script>
+</body>
+</html>
